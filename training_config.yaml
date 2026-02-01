@@ -1,0 +1,51 @@
+experiment:
+  name: finetune_conv_transformer
+  output_dir: checkpoints
+  seed: 42
+  timestamp: true
+
+data:
+  channels:
+    eeg: EEG_P
+    emg: EMG_diff
+  sample_rate: 305.1758
+  epoch_length_seconds: 5.0
+  sequence_length: 11
+  train_ratio: 1.0
+  use_zscore: false
+
+model:
+  name: causal_transformer
+  input_channels: 2
+  # conv encoder hyperparams (aliases to match llm_eeg CausalTransformerClassifier expectations)
+  conv_base_filters: 16
+  conv_kernel_size: 7
+  conv_blocks: 2
+  d_model: 128
+  num_heads: 4
+  num_layers: 4
+  dim_feedforward: 256
+  dropout: 0.1
+  context_window: 11
+  classifier:
+    num_classes: 3
+  stft:
+    sample_rate: 305.1758
+    n_fft: 256
+    hop_length: 128
+    win_length: 256
+    f_max: 40.0
+
+training:
+  batch_size: 64
+  num_workers: 1
+  max_epochs: 50
+  optimizer:
+    lr: 0.0005
+    weight_decay: 0.01
+
+evaluation:
+  finetune_epochs: 10
+  finetune_settings:
+    freeze_backbone: false
+    lr_multiplier: 0.1

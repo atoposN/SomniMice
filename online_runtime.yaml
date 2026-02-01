@@ -1,0 +1,35 @@
+model:
+  config_path: training_config.yaml
+  checkpoint_path: checkpoints/CausalTransformer_best.pt
+
+synapse:
+  host: localhost
+  mode: record
+  gizmo: APIEEG
+  channels:
+    - name: eeg
+      parameter: APIEEG.data1
+      scale: 1000000.0
+    - name: emg
+      operation: diff
+      sources: [APIEMG1.data1, APIEMG2.data1]
+      scale: 1000000.0
+
+runtime:
+  sample_rate: 305.1758
+  epoch_length_seconds: 5.0
+  poll_interval_seconds: 0.5
+  smoothing_window: 1
+  min_confidence: 0.5
+  plot_channels: [eeg, emg]
+  plot_window_seconds: 15.0
+  plot_y_limits: [-1000, 1000]
+  # Optional preprocessing overrides for TestOnline CausalTransformer (defaults shown)
+  preprocess:
+    sample_rate: 305.1758
+    epoch_seconds: 5.0
+    filter_order: 4
+    eeg_band: [0.5, 30.0]
+    emg_band: [15.0, 100.0]
+  # normalization_path: outputs/finetune/finetune_20250101-123456/normalization_stats_20250101.json
+  normalization_path: outputs/finetune/finetune_20251118-204451/normalization_stats_20251118.json

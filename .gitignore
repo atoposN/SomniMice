@@ -1,0 +1,15 @@
+# Data / outputs / caches
+data/
+outputs/
+cache_llm/
+checkpoints/
+
+# Large binary artifacts
+*.pt
+*.h5
+*.mat
+*.npz
+
+# Python caches
+__pycache__/
+*.pyc
