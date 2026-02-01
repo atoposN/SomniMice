@@ -31,12 +31,56 @@ def _resolve_mat_key(mat_dict: Dict) -> str:
     return keys[0]
 
 
-def load_mouse_recording(mat_path: Path) -> np.ndarray:
+def _entry_keys(entry) -> List[str]:
+    if isinstance(entry, dict):
+        return list(entry.keys())
+    if isinstance(entry, np.ndarray) and entry.dtype.names:
+        return list(entry.dtype.names)
+    return []
+
+
+def _entry_get(entry, key: str):
+    if isinstance(entry, dict):
+        return entry[key]
+    if isinstance(entry, np.ndarray) and entry.dtype.names:
+        return entry[key]
+    raise KeyError(key)
+
+
+def _resolve_entry_key(entry, key: str) -> Optional[str]:
+    keys = _entry_keys(entry)
+    if key in keys:
+        return key
+    lower_map = {k.lower(): k for k in keys}
+    return lower_map.get(key.lower())
+
+
+def load_mouse_recording(
+    mat_path: Path,
+    *,
+    eeg_key: str = "EEG_P",
+    emg_key: str = "EMG_DIFF",
+) -> np.ndarray:
     mat = sio.loadmat(mat_path, simplify_cells=True)
     key = mat_path.stem if mat_path.stem in mat else _resolve_mat_key(mat)
     entry = mat[key]
-    eeg = np.asarray(entry["EEG_P"], dtype=np.float32)
-    emg = np.asarray(entry["EMG_DIFF"], dtype=np.float32)
+    eeg_key_resolved = (
+        _resolve_entry_key(entry, eeg_key)
+        or _resolve_entry_key(entry, "EEG_P")
+        or _resolve_entry_key(entry, "EEG")
+    )
+    if eeg_key_resolved is None:
+        raise KeyError(f"Missing EEG channel '{eeg_key}' in {mat_path}")
+    emg_key_resolved = (
+        _resolve_entry_key(entry, emg_key)
+        or _resolve_entry_key(entry, "EMG_DIFF")
+        or _resolve_entry_key(entry, "EMG")
+    )
+    if emg_key_resolved is None:
+        raise KeyError(f"Missing EMG channel '{emg_key}' in {mat_path}")
+
+    eeg = np.asarray(_entry_get(entry, eeg_key_resolved), dtype=np.float32)
+    emg = np.asarray(_entry_get(entry, emg_key_resolved), dtype=np.float32)
     min_len = min(eeg.shape[-1], emg.shape[-1])
     if min_len <= 0:
         raise ValueError(f"Invalid recording length in {mat_path}")
@@ -311,6 +355,8 @@ def load_subject_epochs(
     cfg: PreprocessConfig,
     cache_dir: Optional[Path] = None,
     data_format: str = "mat",
+    eeg_key: str = "EEG_P",
+    emg_key: str = "EMG_DIFF",
 ) -> SubjectEpochs:
     if data_format == "mat":
         mat_path, txt_path = resolve_subject_paths(subject_id, data_dir, data_format="mat")
@@ -336,7 +382,7 @@ def load_subject_epochs(
         data = np.load(mat_path)
         return SubjectEpochs(subject_id, data["epochs"], data["labels"])
 
-    raw = load_mouse_recording(mat_path)
+    raw = load_mouse_recording(mat_path, eeg_key=eeg_key, emg_key=emg_key)
     annotations, meta = parse_label_file(txt_path)
     sos = build_channel_filters(cfg)
     filtered = apply_bandpass(raw, sos)

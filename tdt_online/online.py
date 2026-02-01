@@ -1,7 +1,3 @@
-"""
-python ONLINE.py --runtime-config online_runtime.yaml --device cuda --output-dir data/OnlineRecord/session_20260105 --duration-hours 2.0
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -11,15 +7,12 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 
 from src.constants import STATE_NAMES
-from src.online.synapse_predictor import (
-    SynapseSleepStagePredictor,
-    parse_runtime_config,
-)
+from src.online.synapse_predictor import SynapseSleepStagePredictor, parse_runtime_config
 
 
 class RecordingWriter:
@@ -61,9 +54,7 @@ class RecordingWriter:
                 ]
             )
         with self._txt_path.open("w", encoding="utf-8") as f:
-            f.write(
-                "abs_start_time,start_seconds,one,abs_end_time,end_seconds,zero,label_id,label_name\n"
-            )
+            f.write("abs_start_time,start_seconds,one,abs_end_time,end_seconds,zero,label_id,label_name\n")
 
     def handle_epoch(self, payload: Dict[str, np.ndarray]) -> None:
         with self._lock:
@@ -155,62 +146,53 @@ class RecordingWriter:
                 json.dump(metadata, f, ensure_ascii=False, indent=2)
 
 
-def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Run online inference while recording EEG/EMG epochs and predictions."
-    )
-    parser.add_argument(
-        "--runtime-config",
-        type=Path,
-        default=Path("online_runtime.yaml"),
-        help="Path to runtime configuration YAML (default: online_runtime.yaml).",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=None,
-        help="Directory to store recordings (default: recordings/<timestamp>).",
-    )
-    parser.add_argument(
-        "--duration-hours",
-        type=float,
-        default=None,
-        help="Optional duration (in hours). If omitted, run until interrupted.",
-    )
-    parser.add_argument("--device", type=str, default=None, help="Inference device (cpu/cuda).")
-    parser.add_argument(
-        "--no-plot",
-        action="store_true",
-        help="Disable realtime plotting during recording (useful for long sessions).",
-    )
-    return parser
+def create_predictor(
+    runtime_config: Path,
+    *,
+    checkpoint_path: Optional[Path] = None,
+    device: Optional[str] = None,
+    on_epoch: Optional[Callable[[Dict[str, np.ndarray]], None]] = None,
+) -> SynapseSleepStagePredictor:
+    cfg = parse_runtime_config(runtime_config)
+    if checkpoint_path:
+        cfg.checkpoint_path = checkpoint_path
+    predictor = SynapseSleepStagePredictor(cfg, device=device)
+    if on_epoch:
+        predictor.register_epoch_hook(on_epoch)
+    return predictor
 
 
-def main() -> None:
-    parser = build_arg_parser()
-    args = parser.parse_args()
-
-    cfg = parse_runtime_config(args.runtime_config)
-    if args.no_plot:
+def run_online(
+    runtime_config: Path,
+    *,
+    checkpoint_path: Optional[Path] = None,
+    device: Optional[str] = None,
+    output_dir: Optional[Path] = None,
+    duration_hours: Optional[float] = None,
+    no_plot: bool = False,
+) -> None:
+    cfg = parse_runtime_config(runtime_config)
+    if no_plot:
         cfg.plot_channels = []
+    if checkpoint_path:
+        cfg.checkpoint_path = checkpoint_path
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    # 默认写入 data/OnlineRecord 以区分在线标注输出
-    output_dir = args.output_dir or Path("data/OnlineRecord") / f"session_{timestamp}"
+    output_dir = output_dir or Path("data/OnlineRecord") / f"session_{timestamp}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     (output_dir / "runtime_config_copy.yaml").write_text(
-        args.runtime_config.read_text(encoding="utf-8"), encoding="utf-8"
+        runtime_config.read_text(encoding="utf-8"), encoding="utf-8"
     )
 
-    predictor = SynapseSleepStagePredictor(cfg, device=args.device)
+    predictor = SynapseSleepStagePredictor(cfg, device=device)
     session_start = datetime.now()
     recorder = RecordingWriter(output_dir, session_start=session_start, epoch_length=cfg.epoch_length_seconds)
     predictor.register_epoch_hook(recorder.handle_epoch)
 
     duration_seconds: Optional[float] = None
-    if args.duration_hours and args.duration_hours > 0:
-        duration_seconds = args.duration_hours * 3600.0
+    if duration_hours and duration_hours > 0:
+        duration_seconds = duration_hours * 3600.0
 
     timer: Optional[threading.Timer] = None
 
@@ -233,6 +215,49 @@ def main() -> None:
     session_end = datetime.now()
     recorder.finalize(cfg.sample_rate, cfg.epoch_length_seconds, session_start, session_end)
     print(f"Recording saved to {output_dir}")
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run online inference while recording EEG/EMG epochs and predictions."
+    )
+    parser.add_argument(
+        "--runtime-config",
+        type=Path,
+        default=Path("online_runtime.yaml"),
+        help="Path to runtime configuration YAML (default: online_runtime.yaml).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory to store recordings (default: data/OnlineRecord/<timestamp>).",
+    )
+    parser.add_argument(
+        "--duration-hours",
+        type=float,
+        default=None,
+        help="Optional duration (in hours). If omitted, run until interrupted.",
+    )
+    parser.add_argument("--device", type=str, default=None, help="Inference device (cpu/cuda).")
+    parser.add_argument(
+        "--no-plot",
+        action="store_true",
+        help="Disable realtime plotting during recording (useful for long sessions).",
+    )
+    return parser
+
+
+def main() -> None:
+    args = build_arg_parser().parse_args()
+    run_online(
+        args.runtime_config,
+        checkpoint_path=None,
+        device=args.device,
+        output_dir=args.output_dir,
+        duration_hours=args.duration_hours,
+        no_plot=args.no_plot,
+    )
 
 
 if __name__ == "__main__":
