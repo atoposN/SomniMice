@@ -63,7 +63,7 @@ def fix_var_name(var_str, verbose=False):
     if not valid:
         var_str = 'x' + var_str
     # replace disallowed characters with an underscore
-    fixed_name = re.sub('\W|^(?=\d)', '_', var_str)
+    fixed_name = re.sub(r'\W|^(?=\d)', '_', var_str)
     if fixed_name != var_str and verbose:
         print('info: {0} is not a valid Python variable name, changing to {1}'.format(var_str, fixed_name))
     return fixed_name

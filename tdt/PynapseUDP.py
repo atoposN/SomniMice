@@ -23,9 +23,9 @@ class PynapseUDP():
         self.data = None
         self.data_str = ''
         self.raw_data = None
-        self.pat_value = re.compile("\[(?P<session>.+)\.(?P<block>.+)\.(?P<trial>.+)\] (?P<name>.+)\=(?P<value>.+)")
-        self.pat_session = re.compile("\[(?P<session>.+)\.(?P<block>.+)\.(?P<trial>.+)\] (?P<entry>.+)")
-        self.pat_raw_time = re.compile("(?P<time_str>[^\s]+)[\s]{4}(?P<entry>.+)")
+        self.pat_value = re.compile(r"\[(?P<session>.+)\.(?P<block>.+)\.(?P<trial>.+)\] (?P<name>.+)\=(?P<value>.+)")
+        self.pat_session = re.compile(r"\[(?P<session>.+)\.(?P<block>.+)\.(?P<trial>.+)\] (?P<entry>.+)")
+        self.pat_raw_time = re.compile(r"(?P<time_str>[^\s]+)[\s]{4}(?P<entry>.+)")
         HOST, PORT = '0.0.0.0', 24416 
         
         self.server = socketserver.UDPServer((HOST, PORT), MyUDPHandler)
