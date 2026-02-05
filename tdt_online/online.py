@@ -7,7 +7,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -152,14 +152,88 @@ def create_predictor(
     checkpoint_path: Optional[Path] = None,
     device: Optional[str] = None,
     on_epoch: Optional[Callable[[Dict[str, np.ndarray]], None]] = None,
+    synapse_mode: Optional[str] = None,
+    eeg_parameter: Optional[str] = None,
+    emg_sources: Optional[Sequence[str]] = None,
+    normalization_path: Optional[Path] = None,
 ) -> SynapseSleepStagePredictor:
     cfg = parse_runtime_config(runtime_config)
     if checkpoint_path:
         cfg.checkpoint_path = checkpoint_path
+    if synapse_mode:
+        cfg.synapse_mode = synapse_mode
+    if eeg_parameter or emg_sources:
+        cfg.channels = _override_channels(cfg.channels, eeg_parameter, emg_sources)
+    if normalization_path:
+        means, stds = _load_normalization_stats(normalization_path)
+        if means is None or stds is None:
+            raise ValueError(f"Invalid normalization stats file: {normalization_path}")
+        cfg.normalization_means = means
+        cfg.normalization_stds = stds
     predictor = SynapseSleepStagePredictor(cfg, device=device)
     if on_epoch:
         predictor.register_epoch_hook(on_epoch)
     return predictor
+
+
+def _override_channels(
+    channels: Sequence[ChannelMapping],
+    eeg_parameter: Optional[str],
+    emg_sources: Optional[Sequence[str]],
+) -> List[ChannelMapping]:
+    updated: List[ChannelMapping] = []
+    eeg_done = False
+    emg_done = False
+    emg_list = [s.strip() for s in emg_sources] if emg_sources else []
+    if emg_list and len(emg_list) < 2:
+        raise ValueError("EMG sources must include at least two parameters.")
+
+    for ch in channels:
+        name = ch.name.lower()
+        if name == "eeg" and eeg_parameter:
+            updated.append(
+                ChannelMapping(
+                    name=ch.name,
+                    operation="identity",
+                    sources=(str(eeg_parameter),),
+                    scale=ch.scale,
+                )
+            )
+            eeg_done = True
+        elif name == "emg" and emg_list:
+            updated.append(
+                ChannelMapping(
+                    name=ch.name,
+                    operation="diff",
+                    sources=tuple(emg_list),
+                    scale=ch.scale,
+                )
+            )
+            emg_done = True
+        else:
+            updated.append(ch)
+
+    if eeg_parameter and not eeg_done:
+        updated.append(ChannelMapping.identity(name="eeg", parameter=str(eeg_parameter)))
+    if emg_list and not emg_done:
+        updated.append(ChannelMapping(name="emg", operation="diff", sources=tuple(emg_list)))
+
+    return updated
+
+
+def _load_normalization_stats(path: Path) -> Tuple[Optional[Tuple[float, ...]], Optional[Tuple[float, ...]]]:
+    if not path.exists():
+        return None, None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+        means = payload.get("means")
+        stds = payload.get("stds")
+        if isinstance(means, (list, tuple)) and isinstance(stds, (list, tuple)):
+            return tuple(float(x) for x in means), tuple(float(x) for x in stds)
+    except Exception:
+        return None, None
+    return None, None
 
 
 def run_online(

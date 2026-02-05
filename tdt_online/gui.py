@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from src.constants import STATE_NAMES
+from src.utils import load_config
 from .pipeline import run_finetune_pipeline_from_paths
 from .preprocess import detect_mat_channels, detect_mat_sample_rate
 from .online import create_predictor
@@ -123,6 +124,11 @@ class OnlineGUI(tk.Tk):
         self.runtime_config = tk.StringVar(value=str(Path("online_runtime.yaml").resolve()))
         self.checkpoint_path = tk.StringVar(value="")
         self.online_device = tk.StringVar(value="auto")
+        self.synapse_mode = tk.StringVar(value="record")
+        self.eeg_parameter = tk.StringVar(value="")
+        self.emg_source1 = tk.StringVar(value="")
+        self.emg_source2 = tk.StringVar(value="")
+        self.norm_path = tk.StringVar(value="")
 
         self._row_selector(frame, "Runtime config (YAML):", self.runtime_config, self._choose_runtime, 0)
         self._row_selector(frame, "Best model (checkpoint):", self.checkpoint_path, self._choose_checkpoint, 1)
@@ -131,6 +137,20 @@ class OnlineGUI(tk.Tk):
         ttk.Combobox(frame, textvariable=self.online_device, values=["auto", "cpu", "cuda"], width=10).grid(
             row=2, column=1, sticky="w", **pad
         )
+
+        ttk.Label(frame, text="Synapse mode").grid(row=3, column=0, sticky="w", **pad)
+        ttk.Combobox(frame, textvariable=self.synapse_mode, values=["record", "preview"], width=10).grid(
+            row=3, column=1, sticky="w", **pad
+        )
+        ttk.Label(frame, text="EEG parameter").grid(row=4, column=0, sticky="w", **pad)
+        ttk.Entry(frame, textvariable=self.eeg_parameter, width=40).grid(row=4, column=1, sticky="w", **pad)
+        ttk.Label(frame, text="EMG source 1").grid(row=5, column=0, sticky="w", **pad)
+        ttk.Entry(frame, textvariable=self.emg_source1, width=40).grid(row=5, column=1, sticky="w", **pad)
+        ttk.Label(frame, text="EMG source 2").grid(row=6, column=0, sticky="w", **pad)
+        ttk.Entry(frame, textvariable=self.emg_source2, width=40).grid(row=6, column=1, sticky="w", **pad)
+        self._row_selector(frame, "Normalization JSON:", self.norm_path, self._choose_norm_path, 7)
+
+        self._load_runtime_defaults(Path(self.runtime_config.get()))
 
         actions = ttk.Frame(self.online_tab)
         actions.pack(fill="x", padx=8, pady=8)
@@ -176,11 +196,81 @@ class OnlineGUI(tk.Tk):
         path = filedialog.askopenfilename(title="Select runtime config", filetypes=[("YAML", "*.yaml *.yml")])
         if path:
             self.runtime_config.set(path)
+            self._load_runtime_defaults(Path(path))
 
     def _choose_checkpoint(self) -> None:
         path = filedialog.askopenfilename(title="Select checkpoint", filetypes=[("PyTorch", "*.pt")])
         if path:
             self.checkpoint_path.set(path)
+
+    def _choose_norm_path(self) -> None:
+        path = filedialog.askopenfilename(title="Select normalization JSON", filetypes=[("JSON", "*.json")])
+        if path:
+            self.norm_path.set(path)
+
+    def _load_runtime_defaults(self, path: Path) -> None:
+        if not path.exists():
+            return
+        try:
+            payload = load_config(path)
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        syn_cfg = payload.get("synapse", {})
+        mode = syn_cfg.get("mode")
+        if isinstance(mode, str) and mode.strip():
+            self.synapse_mode.set(mode.strip().lower())
+
+        channels = syn_cfg.get("channels", {})
+        eeg_param = None
+        emg_sources: list[str] = []
+        if isinstance(channels, list):
+            for entry in channels:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get("name", "")).strip().lower()
+                if name == "eeg":
+                    eeg_param = entry.get("parameter")
+                    if not eeg_param:
+                        sources = entry.get("sources") or []
+                        if isinstance(sources, (list, tuple)) and sources:
+                            eeg_param = sources[0]
+                elif name == "emg":
+                    sources = entry.get("sources") or []
+                    if isinstance(sources, str):
+                        emg_sources = [sources]
+                    elif isinstance(sources, (list, tuple)):
+                        emg_sources = [str(s) for s in sources]
+        elif isinstance(channels, dict):
+            eeg_entry = channels.get("eeg")
+            if isinstance(eeg_entry, str):
+                eeg_param = eeg_entry
+            elif isinstance(eeg_entry, dict):
+                eeg_param = eeg_entry.get("parameter")
+                if not eeg_param:
+                    sources = eeg_entry.get("sources") or []
+                    if isinstance(sources, (list, tuple)) and sources:
+                        eeg_param = sources[0]
+
+            emg_entry = channels.get("emg")
+            if isinstance(emg_entry, dict):
+                sources = emg_entry.get("sources") or []
+                if isinstance(sources, str):
+                    emg_sources = [sources]
+                elif isinstance(sources, (list, tuple)):
+                    emg_sources = [str(s) for s in sources]
+
+        if eeg_param:
+            self.eeg_parameter.set(str(eeg_param))
+        if emg_sources:
+            self.emg_source1.set(emg_sources[0] if len(emg_sources) > 0 else "")
+            self.emg_source2.set(emg_sources[1] if len(emg_sources) > 1 else "")
+
+        runtime_cfg = payload.get("runtime", {})
+        norm_path = runtime_cfg.get("normalization_path")
+        if isinstance(norm_path, str) and norm_path.strip():
+            self.norm_path.set(norm_path.strip())
 
     def _load_channels_from_mat(self, mat_path: Path) -> None:
         try:
@@ -306,12 +396,29 @@ class OnlineGUI(tk.Tk):
             messagebox.showerror("Online", "Checkpoint not found.")
             return
 
+        eeg_param = self.eeg_parameter.get().strip()
+        emg1 = self.emg_source1.get().strip()
+        emg2 = self.emg_source2.get().strip()
+        if not eeg_param:
+            messagebox.showerror("Online", "Please provide EEG parameter.")
+            return
+        if not emg1 or not emg2:
+            messagebox.showerror("Online", "Please provide two EMG sources.")
+            return
+        norm_path = self.norm_path.get().strip()
+        if norm_path and not Path(norm_path).exists():
+            messagebox.showerror("Online", "Normalization JSON not found.")
+            return
+
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
 
         def task() -> None:
             try:
                 device = None if self.online_device.get() == "auto" else self.online_device.get()
+                mode = self.synapse_mode.get().strip().lower()
+                if mode not in {"record", "preview"}:
+                    mode = None
 
                 def hook(payload: dict) -> None:
                     self._queue.put(("pred", payload))
@@ -321,6 +428,10 @@ class OnlineGUI(tk.Tk):
                     checkpoint_path=Path(ckpt_path) if ckpt_path else None,
                     device=device,
                     on_epoch=hook,
+                    synapse_mode=mode,
+                    eeg_parameter=eeg_param,
+                    emg_sources=[emg1, emg2],
+                    normalization_path=Path(norm_path) if norm_path else None,
                 )
                 self._predictor = predictor
                 predictor.run()
